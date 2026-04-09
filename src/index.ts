@@ -2,6 +2,7 @@ import express from "express";
 import { Server as SocketIOServer } from "socket.io";
 import http from "http";
 import path from "path";
+import fs from "fs";
 import * as CANNON from "cannon-es";
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -936,10 +937,22 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+    const indexPath = path.join(distPath, "index.html");
+    
+    if (fs.existsSync(indexPath)) {
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(indexPath);
+      });
+    } else {
+      app.get("/", (req, res) => {
+        res.json({ 
+          message: "Soccer Rivals 3D Backend is running.", 
+          status: "healthy",
+          serverTime: new Date().toISOString()
+        });
+      });
+    }
   }
 
   server.listen(PORT, "0.0.0.0", () => {
