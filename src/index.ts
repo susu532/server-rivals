@@ -151,31 +151,7 @@ function createRoom(roomId: string, isPrivate: boolean, isTraining: boolean = fa
 
   createWall(0, wallHeight, 0, fieldWidth, 1, fieldLength + goalDepth * 2);
 
-  // Corner Bumpers
-  const createCornerCurve = (x: number, z: number, radius: number) => {
-    const cylinderShape = new CANNON.Cylinder(radius, radius, wallHeight, 16);
-    const cornerBody = new CANNON.Body({
-      type: CANNON.Body.STATIC,
-      material: wallMaterial,
-    });
-    // CANNON cylinder is oriented along its local Z axis. Rotate to align with Y.
-    const q = new CANNON.Quaternion();
-    q.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-    cornerBody.addShape(cylinderShape, new CANNON.Vec3(0, 0, 0), q);
-    cornerBody.position.set(x, wallHeight / 2, z);
-    world.addBody(cornerBody);
-  };
-
-  const cr = 4; // corner radius
-  // Top Left (-x, -z)
-  createCornerCurve(-fieldWidth / 2 + cr, -fieldLength / 2 + cr, cr);
-  // Top Right (+x, -z)
-  createCornerCurve(fieldWidth / 2 - cr, -fieldLength / 2 + cr, cr);
-  // Bottom Left (-x, +z)
-  createCornerCurve(-fieldWidth / 2 + cr, fieldLength / 2 - cr, cr);
-  // Bottom Right (+x, +z)
-  createCornerCurve(fieldWidth / 2 - cr, fieldLength / 2 - cr, cr);
-
+  
   // Ball
   const ballBody = new CANNON.Body({
     mass: 0.8,
