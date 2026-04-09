@@ -1,3 +1,12 @@
+/**
+ * @copyright 2026 hentertrabelsi
+ * @contact Email: hentertrabelsi@gmail.com
+ * @discord #susuxo
+ * 
+ * All rights reserved. This software is proprietary and confidential.
+ * You may not use, copy, modify, merge, publish, distribute, sublicense, and/or
+ * sell copies of the Software without explicit permission.
+ */
 import express from "express";
 import { Server as SocketIOServer } from "socket.io";
 import http from "http";
@@ -141,6 +150,31 @@ function createRoom(roomId: string, isPrivate: boolean, isTraining: boolean = fa
   createWall(0, goalHeight, fieldLength / 2 + goalDepth / 2, goalWidth, 1, goalDepth);
 
   createWall(0, wallHeight, 0, fieldWidth, 1, fieldLength + goalDepth * 2);
+
+  // Corner Bumpers
+  const createCornerCurve = (x: number, z: number, radius: number) => {
+    const cylinderShape = new CANNON.Cylinder(radius, radius, wallHeight, 16);
+    const cornerBody = new CANNON.Body({
+      type: CANNON.Body.STATIC,
+      material: wallMaterial,
+    });
+    // CANNON cylinder is oriented along its local Z axis. Rotate to align with Y.
+    const q = new CANNON.Quaternion();
+    q.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+    cornerBody.addShape(cylinderShape, new CANNON.Vec3(0, 0, 0), q);
+    cornerBody.position.set(x, wallHeight / 2, z);
+    world.addBody(cornerBody);
+  };
+
+  const cr = 4; // corner radius
+  // Top Left (-x, -z)
+  createCornerCurve(-fieldWidth / 2 + cr, -fieldLength / 2 + cr, cr);
+  // Top Right (+x, -z)
+  createCornerCurve(fieldWidth / 2 - cr, -fieldLength / 2 + cr, cr);
+  // Bottom Left (-x, +z)
+  createCornerCurve(-fieldWidth / 2 + cr, fieldLength / 2 - cr, cr);
+  // Bottom Right (+x, +z)
+  createCornerCurve(fieldWidth / 2 - cr, fieldLength / 2 - cr, cr);
 
   // Ball
   const ballBody = new CANNON.Body({
@@ -961,3 +995,8 @@ async function startServer() {
 }
 
 startServer();
+
+
+/**
+ * @copyright 2026 hentertrabelsi - All Rights Reserved
+ */

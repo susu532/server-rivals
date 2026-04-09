@@ -2,6 +2,12 @@
   "name": "soccer-rivals-server",
   "version": "1.0.0",
   "type": "module",
+  "license": "UNLICENSED",
+  "author": {
+    "name": "hentertrabelsi",
+    "email": "hentertrabelsi@gmail.com",
+    "url": "discord:#susuxo"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsx build.ts",
