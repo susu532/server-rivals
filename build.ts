@@ -7,5 +7,5 @@ esbuild.build({
   target: 'node20',
   outfile: 'dist/index.cjs',
   format: 'cjs',
-  external: ['express', 'socket.io', 'cannon-es'],
+  external: ['express', 'socket.io', 'cannon-es', 'vite'],
 }).catch(() => process.exit(1));
