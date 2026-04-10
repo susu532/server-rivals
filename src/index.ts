@@ -533,7 +533,16 @@ async function startServer() {
 
   // Security Middlewares
   app.set("trust proxy", 1); // Trust first proxy (Render/Vercel)
-  app.use(helmet());
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          "img-src": ["'self'", "data:", "https://flagcdn.com"],
+        },
+      },
+    })
+  );
 
   const allowedOrigins = process.env.ALLOWED_ORIGINS 
     ? process.env.ALLOWED_ORIGINS.split(",") 
