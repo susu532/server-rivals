@@ -339,74 +339,133 @@ function updateBots(room: Room) {
   if (room.botIds.length === 0) return;
 
   const ballPos = room.ballBody.position;
-  const reactionDelay = room.difficulty === 'easy' ? 30 : room.difficulty === 'medium' ? 15 : 5;
+  // Make bots generally slower to react in standard non-training matches 
+  // (30 ticks = 0.5s delay, 45 ticks = 0.75s delay)
+  const reactionDelay = room.isTraining ? 
+    (room.difficulty === 'easy' ? 30 : room.difficulty === 'medium' ? 15 : 5) : 45;
 
+  // Group bots by team
+  const botsByTeam: Record<string, string[]> = { red: [], blue: [] };
   for (const botId of room.botIds) {
-    const botBody = room.playerBodies[botId];
-    const botState = room.gameState.players[botId];
-    if (!botBody || !botState) continue;
+    const state = room.gameState.players[botId];
+    if (state) {
+      botsByTeam[state.team].push(botId);
+    }
+  }
 
-    // Only update input every few ticks based on difficulty
-    if (room.ticks % reactionDelay !== 0) continue;
+  for (const team of ['red', 'blue']) {
+    const teamBots = botsByTeam[team];
+    if (teamBots.length === 0) continue;
 
-    const input = room.playerInputs[botId];
-    const teamDir = botState.team === 'red' ? -1 : 1; // Red wants to push to negative Z, Blue to positive Z
-    const opponentGoalZ = botState.team === 'red' ? -20 : 20;
-
-    // Vector to ball
-    const toBallX = ballPos.x - botBody.position.x;
-    const toBallZ = ballPos.z - botBody.position.z;
-    const distToBall = Math.sqrt(toBallX * toBallX + toBallZ * toBallZ);
-
-    // AI Logic:
-    // 1. If ball is behind us (relative to goal we are defending), go around it
-    // 2. Otherwise, move towards ball
-    // 3. If close to ball, kick towards goal
-
-    let targetX = ballPos.x;
-    let targetZ = ballPos.z;
-
-    // If ball is "behind" the bot relative to the direction it should be pushing
-    const isBallBehind = botState.team === 'red' ? (ballPos.z > botBody.position.z + 1) : (ballPos.z < botBody.position.z - 1);
-
-    if (isBallBehind) {
-      // Move to a position behind the ball first
-      targetZ = ballPos.z + (botState.team === 'red' ? 3 : -3);
-      // Add some horizontal offset to avoid running into the ball while repositioning
-      if (Math.abs(toBallX) < 2) {
-        targetX = ballPos.x + (toBallX > 0 ? -3 : 3);
+    // Determine roles based on distance to ball
+    let closestBotId = teamBots[0];
+    let minBotDist = Infinity;
+    
+    for (const botId of teamBots) {
+      const botBody = room.playerBodies[botId];
+      if (!botBody) continue;
+      const dist = Math.sqrt(
+        Math.pow(botBody.position.x - ballPos.x, 2) + 
+        Math.pow(botBody.position.z - ballPos.z, 2)
+      );
+      if (dist < minBotDist) {
+        minBotDist = dist;
+        closestBotId = botId;
       }
     }
 
-    const dirX = targetX - botBody.position.x;
-    const dirZ = targetZ - botBody.position.z;
-    const dist = Math.sqrt(dirX * dirX + dirZ * dirZ);
+    for (const botId of teamBots) {
+      const botBody = room.playerBodies[botId];
+      const botState = room.gameState.players[botId];
+      if (!botBody || !botState) continue;
 
-    if (dist > 0.5) {
-      input.x = dirX / dist;
-      input.z = dirZ / dist;
-    } else {
-      input.x = 0;
-      input.z = 0;
-    }
+      // Stagger updates so bots don't all react on exactly the same tick
+      const offset = room.botIds.indexOf(botId);
+      if ((room.ticks + offset) % reactionDelay !== 0) continue;
 
-    // Kicking logic
-    if (distToBall < 2.5) {
-      // Check if we are facing the right way to kick towards goal
-      const toGoalX = 0 - botBody.position.x;
-      const toGoalZ = opponentGoalZ - botBody.position.z;
-      const dot = (toBallX * toGoalX + toBallZ * toGoalZ);
-      
-      if (dot > 0 || room.difficulty === 'hard') {
-        input.kick = true;
-        // Set camera angle for kick direction (towards goal)
-        input.cameraAngle = Math.atan2(-toGoalX, -toGoalZ);
+      const input = room.playerInputs[botId];
+      const opponentGoalZ = botState.team === 'red' ? -20 : 20;
+      const ourGoalZ = botState.team === 'red' ? 20 : -20;
+
+      const toBallX = ballPos.x - botBody.position.x;
+      const toBallZ = ballPos.z - botBody.position.z;
+      const distToBall = Math.sqrt(toBallX * toBallX + toBallZ * toBallZ);
+
+      let targetX = ballPos.x;
+      let targetZ = ballPos.z;
+
+      const role = (botId === closestBotId) ? 'chaser' : 'defender';
+
+      if (role === 'chaser') {
+        // Chaser Logic
+        const isBallBehind = botState.team === 'red' ? (ballPos.z > botBody.position.z + 1) : (ballPos.z < botBody.position.z - 1);
+
+        if (isBallBehind) {
+          // Move to a position behind the ball first
+          targetZ = ballPos.z + (botState.team === 'red' ? 4 : -4);
+          // Add some horizontal offset to avoid running into the ball while repositioning
+          if (Math.abs(toBallX) < 2) {
+            targetX = ballPos.x + (toBallX > 0 ? -4 : 4);
+          }
+        }
+        
+        // In standard non-training matches, make chaser movement slightly inaccurate
+        if (!room.isTraining) {
+            targetX += (Math.random() - 0.5) * 3;
+            targetZ += (Math.random() - 0.5) * 3;
+        }
+      } else {
+        // Defender Logic
+        // Stay between the ball and our goal, staying back
+        targetZ = ourGoalZ + (botState.team === 'red' ? -6 : 6);
+        targetX = ballPos.x * 0.4; // Follow the X position loosely
+        targetX = Math.max(-4, Math.min(4, targetX)); // Stay within goal posts
       }
-    }
 
-    // Random jumps for Hard difficulty
-    if (room.difficulty === 'hard' && Math.random() < 0.01 && botBody.position.y < 1.1) {
-      input.jump = true;
+      const dirX = targetX - botBody.position.x;
+      const dirZ = targetZ - botBody.position.z;
+      const dist = Math.sqrt(dirX * dirX + dirZ * dirZ);
+
+      if (dist > 0.5) {
+        input.x = dirX / dist;
+        input.z = dirZ / dist;
+        
+        // Very Easy logic: sluggish speed for general play
+        if (!room.isTraining) {
+          // Occasional hesitation
+          if (Math.random() < 0.3) {
+             input.x *= 0.3;
+             input.z *= 0.3;
+          }
+        }
+      } else {
+        input.x = 0;
+        input.z = 0;
+      }
+
+      // Kicking logic
+      if (distToBall < 3.0) {
+        const toGoalX = 0 - botBody.position.x;
+        const toGoalZ = opponentGoalZ - botBody.position.z;
+        const dot = (toBallX * toGoalX + toBallZ * toGoalZ);
+        
+        if (role === 'defender') {
+          // Defenders just clear the ball if it comes near them
+          input.kick = true;
+          input.cameraAngle = Math.atan2(-toGoalX, -toGoalZ);
+        } else {
+          // Chasers kick if headed roughly towards goal
+          if (dot > 0 || room.difficulty === 'hard') {
+            input.kick = true;
+            input.cameraAngle = Math.atan2(-toGoalX, -toGoalZ);
+          }
+        }
+      }
+
+      // Random jumps for Hard difficulty
+      if (room.difficulty === 'hard' && Math.random() < 0.01 && botBody.position.y < 1.1) {
+        input.jump = true;
+      }
     }
   }
 }
@@ -823,7 +882,7 @@ async function startServer() {
               delete room.gameState.lastScorer;
               room.resetPositions();
             } else {
-              room.gameState.message = `Waiting for players... ${10 - Math.floor(room.waitingTicks / TICK_RATE)}s until bots join`;
+              room.gameState.message = `Waiting for players... `;
             }
           } else {
             room.waitingTicks = 0;
