@@ -92,7 +92,7 @@ function createRoom(roomId: string, isPrivate: boolean, isTraining: boolean = fa
   const wallMaterial = new CANNON.Material('wall');
 
   world.addContactMaterial(new CANNON.ContactMaterial(groundMaterial, ballMaterial, { friction: 1.0, restitution: 0.4 }));
-  world.addContactMaterial(new CANNON.ContactMaterial(wallMaterial, ballMaterial, { friction: 0.5, restitution: 0.1 }));
+  world.addContactMaterial(new CANNON.ContactMaterial(wallMaterial, ballMaterial, { friction: 0.0, restitution: 0.1 }));
   world.addContactMaterial(new CANNON.ContactMaterial(groundMaterial, playerMaterial, { friction: 0.0, restitution: 0.0 }));
   world.addContactMaterial(new CANNON.ContactMaterial(playerMaterial, ballMaterial, { friction: 0.2, restitution: 0.4 }));
   world.addContactMaterial(new CANNON.ContactMaterial(playerMaterial, wallMaterial, { friction: 0.0, restitution: 0.0 }));
@@ -151,7 +151,58 @@ function createRoom(roomId: string, isPrivate: boolean, isTraining: boolean = fa
 
   createWall(0, wallHeight, 0, fieldWidth, 1, fieldLength + goalDepth * 2);
 
-  
+  // Corner Bumpers (Vertical Curve)
+  const createCornerCurve = (x: number, z: number, radius: number) => {
+    const cylinderShape = new CANNON.Cylinder(radius, radius, wallHeight, 16);
+    const cornerBody = new CANNON.Body({
+      type: CANNON.Body.STATIC,
+      material: wallMaterial,
+    });
+    // CANNON cylinder is oriented along its local Z axis. Rotate to align with Y.
+    const q = new CANNON.Quaternion();
+    q.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+    cornerBody.addShape(cylinderShape, new CANNON.Vec3(0, 0, 0), q);
+    cornerBody.position.set(x, wallHeight / 2, z);
+    world.addBody(cornerBody);
+  };
+
+  const cr = 4; // corner radius
+  // Top Left (-x, -z)
+  createCornerCurve(-fieldWidth / 2 + cr, -fieldLength / 2 + cr, cr);
+  // Top Right (+x, -z)
+  createCornerCurve(fieldWidth / 2 - cr, -fieldLength / 2 + cr, cr);
+  // Bottom Left (-x, +z)
+  createCornerCurve(-fieldWidth / 2 + cr, fieldLength / 2 - cr, cr);
+  // Bottom Right (+x, +z)
+  createCornerCurve(fieldWidth / 2 - cr, fieldLength / 2 - cr, cr);
+
+  // Corner Banks / Ramps (Rocket League Style)
+  const createCornerBank = (x: number, z: number, angleY: number) => {
+    const bankShape = new CANNON.Box(new CANNON.Vec3(10, 0.5, 4));
+    const bankBody = new CANNON.Body({
+      type: CANNON.Body.STATIC,
+      material: wallMaterial,
+    });
+    
+    // Pitch up by 45 degrees
+    const qPitch = new CANNON.Quaternion();
+    qPitch.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 4);
+    
+    // Yaw to face the center
+    const qYaw = new CANNON.Quaternion();
+    qYaw.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), angleY);
+    
+    bankBody.quaternion = qYaw.mult(qPitch);
+    bankBody.position.set(x, 1, z);
+    world.addBody(bankBody);
+  };
+
+  // Add 45-degree sloping banks in the 4 corners so the ball rolls upwards
+  createCornerBank(-fieldWidth / 2 + cr/2, -fieldLength / 2 + cr/2, Math.PI / 4);     // Top Left
+  createCornerBank(fieldWidth / 2 - cr/2, -fieldLength / 2 + cr/2, -Math.PI / 4);     // Top Right
+  createCornerBank(-fieldWidth / 2 + cr/2, fieldLength / 2 - cr/2, 3 * Math.PI / 4);  // Bottom Left
+  createCornerBank(fieldWidth / 2 - cr/2, fieldLength / 2 - cr/2, -3 * Math.PI / 4);  // Bottom Right
+
   // Ball
   const ballBody = new CANNON.Body({
     mass: 0.8,
