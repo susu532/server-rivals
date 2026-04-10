@@ -13,6 +13,9 @@ import http from "http";
 import path from "path";
 import fs from "fs";
 import * as CANNON from "cannon-es";
+import helmet from "helmet";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
 
 const PORT = Number(process.env.PORT) || 3000;
 const TICK_RATE = 60;
@@ -404,8 +407,36 @@ function updateBots(room: Room) {
 
 async function startServer() {
   const app = express();
+
+  // Security Middlewares
+  app.set("trust proxy", 1); // Trust first proxy (Render/Vercel)
+  app.use(helmet());
+
+  const allowedOrigins = process.env.ALLOWED_ORIGINS 
+    ? process.env.ALLOWED_ORIGINS.split(",") 
+    : ["http://localhost:5173", "http://localhost:3000"];
+    
+  app.use(cors({
+    origin: allowedOrigins,
+    methods: ["GET", "POST"]
+  }));
+
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    limit: 100, // Limit each IP to 100 requests per 15 minutes
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+  });
+  
+  app.use('/api/', apiLimiter);
+
   const server = http.createServer(app);
-  const io = new SocketIOServer(server, { cors: { origin: "*" } });
+  const io = new SocketIOServer(server, { 
+    cors: { 
+      origin: allowedOrigins,
+      methods: ["GET", "POST"]
+    } 
+  });
 
   const playerRooms = new Map<string, string>(); // socket.id -> roomId
   const matchmakingQueue: string[] = [];
@@ -520,6 +551,8 @@ async function startServer() {
     socket.to(room.id).emit("playerJoined", room.gameState.players[socket.id]);
   }
 
+  const chatRateLimits = new Map<string, number[]>();
+
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
@@ -609,6 +642,19 @@ async function startServer() {
 
     socket.on("chat", (message: string) => {
       if (message.length > 100) return;
+      
+      const now = Date.now();
+      const timestamps = chatRateLimits.get(socket.id) || [];
+      const recentTimestamps = timestamps.filter(t => now - t < 10000); // within last 10 seconds
+      
+      if (recentTimestamps.length >= 5) {
+        socket.emit("error", "Chat rate limit exceeded. Please wait.");
+        return;
+      }
+      
+      recentTimestamps.push(now);
+      chatRateLimits.set(socket.id, recentTimestamps);
+
       const roomId = playerRooms.get(socket.id);
       if (roomId) {
         const room = rooms.get(roomId);
@@ -630,6 +676,7 @@ async function startServer() {
 
     socket.on("disconnect", () => {
       console.log("User disconnected:", socket.id);
+      chatRateLimits.delete(socket.id);
       leaveRoom(socket);
     });
   });
