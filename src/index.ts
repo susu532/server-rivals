@@ -7,7 +7,7 @@
  * You may not use, copy, modify, merge, publish, distribute, sublicense, and/or
  * sell copies of the Software without explicit permission.
  */
-.import express from "express";
+import express from "express";
 import { Server as SocketIOServer } from "socket.io";
 import http from "http";
 import path from "path";
