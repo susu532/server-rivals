@@ -79,7 +79,6 @@ interface Room {
   resetPositions: () => void;
   lastTouchId: string | null;
   secondLastTouchId: string | null;
-  waitingTicks?: number;
 }
 
 const rooms = new Map<string, Room>();
@@ -284,7 +283,6 @@ function createRoom(roomId: string, isPrivate: boolean, isTraining: boolean = fa
     resetPositions,
     lastTouchId: null,
     secondLastTouchId: null,
-    waitingTicks: 0,
   };
 }
 
@@ -293,16 +291,23 @@ function generateRoomCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-const BOT_NAMES = ['Alex', 'Sam', 'Jordan', 'Taylor', 'Morgan', 'Casey', 'Riley', 'Jamie', 'Charlie', 'Avery', 'Parker', 'Quinn', 'Peyton', 'Skyler', 'Dakota', 'Reese', 'Rowan', 'Hayden', 'Emerson', 'Finley', 'Mia', 'Liam', 'Noah', 'Emma', 'Oliver', 'Ava', 'Elijah'];
+const HUMAN_NAMES = ['Alex', 'Sam', 'Jordan', 'Taylor', 'Casey', 'Riley', 'Morgan', 'Jamie', 'Quinn', 'Avery', 'Leo', 'Mia', 'Noah', 'Emma', 'Oliver', 'Ava', 'Elijah', 'Sophia', 'Lucas', 'Isabella'];
 
-function addBot(room: Room, team: 'red' | 'blue', isHumanLike: boolean = false) {
+function getPlayerDimensions(character: string) {
+  if (character === 'fox') {
+    return new CANNON.Vec3(0.25, 0.5, 0.25);
+  }
+  return new CANNON.Vec3(0.5, 1, 0.5);
+}
+
+function addBot(room: Room, team: 'red' | 'blue', humanLike: boolean = false) {
   const botId = `bot_${Math.random().toString(36).substring(2, 8)}`;
   const color = team === 'red' ? '#ff007f' : '#00ffff';
   const startZ = team === 'red' ? 10 : -10;
 
   const botBody = new CANNON.Body({
     mass: 5,
-    shape: new CANNON.Box(new CANNON.Vec3(0.5, 1, 0.5)),
+    shape: new CANNON.Box(getPlayerDimensions('robot')),
     position: new CANNON.Vec3((Math.random() - 0.5) * 10, 1, startZ),
     material: room.playerMaterial,
     fixedRotation: true,
@@ -312,12 +317,12 @@ function addBot(room: Room, team: 'red' | 'blue', isHumanLike: boolean = false) 
   room.playerBodies[botId] = botBody;
   room.playerInputs[botId] = { x: 0, z: 0, kick: false, jump: false, cameraAngle: 0 };
   room.botIds.push(botId);
-  
-  const botName = isHumanLike ? BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)] : `AI (${room.difficulty.toUpperCase()})`;
+
+  const name = humanLike ? HUMAN_NAMES[Math.floor(Math.random() * HUMAN_NAMES.length)] : `AI (${room.difficulty.toUpperCase()})`;
 
   room.gameState.players[botId] = {
     id: botId,
-    name: botName,
+    name,
     position: [botBody.position.x, botBody.position.y, botBody.position.z],
     velocity: [0, 0, 0],
     rotation: [0, 0, 0, 1],
@@ -339,183 +344,136 @@ function updateBots(room: Room) {
   if (room.botIds.length === 0) return;
 
   const ballPos = room.ballBody.position;
+  // Increase reaction delay to make them slower to respond
+  const reactionDelay = room.difficulty === 'easy' ? 45 : room.difficulty === 'medium' ? 20 : 5;
 
-  if (room.isTraining) {
-    const reactionDelay = room.difficulty === 'easy' ? 30 : room.difficulty === 'medium' ? 15 : 5;
-    for (const botId of room.botIds) {
-      const botBody = room.playerBodies[botId];
-      const botState = room.gameState.players[botId];
-      if (!botBody || !botState) continue;
+  // Find the single closest bot to the ball across ALL bots
+  let absoluteClosestBotId: string | null = null;
+  let minDistance = Infinity;
+  
+  // Track assigned defenders
+  const defendersAssigned: { red: boolean; blue: boolean } = { red: false, blue: false };
+  const botRoles: Record<string, 'attacker' | 'defender'> = {};
 
-      if (room.ticks % reactionDelay !== 0) continue;
-
-      const input = room.playerInputs[botId];
-      const opponentGoalZ = botState.team === 'red' ? -20 : 20;
-
-      const toBallX = ballPos.x - botBody.position.x;
-      const toBallZ = ballPos.z - botBody.position.z;
-      const distToBall = Math.sqrt(toBallX * toBallX + toBallZ * toBallZ);
-
-      let targetX = ballPos.x;
-      let targetZ = ballPos.z;
-
-      const isBallBehind = botState.team === 'red' ? (ballPos.z > botBody.position.z + 1) : (ballPos.z < botBody.position.z - 1);
-
-      if (isBallBehind) {
-        targetZ = ballPos.z + (botState.team === 'red' ? 3 : -3);
-        if (Math.abs(toBallX) < 2) {
-          targetX = ballPos.x + (toBallX > 0 ? -3 : 3);
-        }
-      }
-
-      const dirX = targetX - botBody.position.x;
-      const dirZ = targetZ - botBody.position.z;
-      const dist = Math.sqrt(dirX * dirX + dirZ * dirZ);
-
-      if (dist > 0.5) {
-        input.x = dirX / dist;
-        input.z = dirZ / dist;
-      } else {
-        input.x = 0;
-        input.z = 0;
-      }
-
-      if (distToBall < 2.5) {
-        const toGoalX = 0 - botBody.position.x;
-        const toGoalZ = opponentGoalZ - botBody.position.z;
-        const dot = (toBallX * toGoalX + toBallZ * toGoalZ);
-        
-        if (dot > 0 || room.difficulty === 'hard') {
-          input.kick = true;
-          input.cameraAngle = Math.atan2(-toGoalX, -toGoalZ);
-        }
-      }
-
-      if (room.difficulty === 'hard' && Math.random() < 0.01 && botBody.position.y < 1.1) {
-        input.jump = true;
-      }
-    }
-    return;
-  }
-
-  // Make bots generally slower to react in standard non-training matches 
-  // (30 ticks = 0.5s delay, 45 ticks = 0.75s delay)
-  const reactionDelay = 45;
-
-  // Group bots by team
-  const botsByTeam: Record<string, string[]> = { red: [], blue: [] };
   for (const botId of room.botIds) {
-    const state = room.gameState.players[botId];
-    if (state) {
-      botsByTeam[state.team].push(botId);
+    const botBody = room.playerBodies[botId];
+    if (!botBody) continue;
+    const dist = Math.sqrt(Math.pow(ballPos.x - botBody.position.x, 2) + Math.pow(ballPos.z - botBody.position.z, 2));
+    if (dist < minDistance) {
+      minDistance = dist;
+      absoluteClosestBotId = botId;
     }
   }
 
-  for (const team of ['red', 'blue']) {
-    const teamBots = botsByTeam[team];
-    if (teamBots.length === 0) continue;
-
-    // Determine roles based on distance to ball
-    let closestBotId = teamBots[0];
-    let minBotDist = Infinity;
+  for (const botId of room.botIds) {
+    const botState = room.gameState.players[botId];
+    if (!botState) continue;
     
-    for (const botId of teamBots) {
-      const botBody = room.playerBodies[botId];
-      if (!botBody) continue;
-      const dist = Math.sqrt(
-        Math.pow(botBody.position.x - ballPos.x, 2) + 
-        Math.pow(botBody.position.z - ballPos.z, 2)
-      );
-      if (dist < minBotDist) {
-        minBotDist = dist;
-        closestBotId = botId;
+    if (botId === absoluteClosestBotId) {
+      botRoles[botId] = 'attacker';
+    } else if (!defendersAssigned[botState.team]) {
+      botRoles[botId] = 'defender';
+      defendersAssigned[botState.team] = true;
+    } else {
+      // If already have a defender, this bot becomes a secondary attacker/midfielder
+      botRoles[botId] = 'attacker';
+    }
+  }
+
+  for (const botId of room.botIds) {
+    const botBody = room.playerBodies[botId];
+    const botState = room.gameState.players[botId];
+    if (!botBody || !botState) continue;
+
+    // Only update input every few ticks based on difficulty
+    if (room.ticks % reactionDelay !== 0) continue;
+
+    const input = room.playerInputs[botId];
+    const opponentGoalZ = botState.team === 'red' ? -20 : 20;
+    const ownGoalZ = botState.team === 'red' ? 20 : -20;
+
+    // Vector to ball
+    const toBallX = ballPos.x - botBody.position.x;
+    const toBallZ = ballPos.z - botBody.position.z;
+    const distToBall = Math.sqrt(toBallX * toBallX + toBallZ * toBallZ);
+
+    let targetX = ballPos.x;
+    let targetZ = ballPos.z;
+
+    const isAttacker = botRoles[botId] === 'attacker';
+    const isFillBot = !room.isTraining;
+
+    if (isAttacker) {
+      const teamDir = botState.team === 'red' ? -1 : 1;
+      const isAheadOfBall = botState.team === 'red' ? (botBody.position.z < ballPos.z - 0.5) : (botBody.position.z > ballPos.z + 0.5);
+
+      if (isAheadOfBall) {
+        // Loop around to get behind the ball
+        targetZ = ballPos.z - teamDir * 4;
+        targetX = ballPos.x + (botBody.position.x > ballPos.x ? 3 : -3);
+      } else {
+        // We are behind the ball, push it towards the goal
+        targetX = ballPos.x;
+        targetZ = ballPos.z;
+      }
+
+      if (room.difficulty === 'easy' && !isFillBot) {
+         targetX += (Math.random() - 0.5) * 2;
+         targetZ += (Math.random() - 0.5) * 2;
+      }
+    } else {
+      // Defender Logic (strictly stay at goal)
+      targetZ = botState.team === 'red' ? 15 : -15;
+      if (isFillBot) {
+         // Fill bot defender wanders slightly near goal
+         const timeSec = Date.now() / 1000;
+         const botUniqueOffset = botBody.id * 10;
+         targetX = Math.cos(timeSec * 0.3 + botUniqueOffset) * 4;
+      } else {
+         // Training bot defender tracks ball X
+         const trackingError = room.difficulty === 'easy' ? (Math.random() - 0.5) * 4 : 0;
+         targetX = Math.max(-4, Math.min(4, ballPos.x + trackingError));
       }
     }
-
-    for (const botId of teamBots) {
-      const botBody = room.playerBodies[botId];
-      const botState = room.gameState.players[botId];
-      if (!botBody || !botState) continue;
-
-      // Stagger updates so bots don't all react on exactly the same tick
-      const offset = room.botIds.indexOf(botId);
-      if ((room.ticks + offset) % reactionDelay !== 0) continue;
-
-      const input = room.playerInputs[botId];
-      const opponentGoalZ = botState.team === 'red' ? -20 : 20;
-      const ourGoalZ = botState.team === 'red' ? 20 : -20;
-
-      const toBallX = ballPos.x - botBody.position.x;
-      const toBallZ = ballPos.z - botBody.position.z;
-      const distToBall = Math.sqrt(toBallX * toBallX + toBallZ * toBallZ);
-
-      let targetX = ballPos.x;
-      let targetZ = ballPos.z;
-
-      const role = (botId === closestBotId) ? 'chaser' : 'defender';
-
-      if (role === 'chaser') {
-        // Chaser Logic
-        const isBallBehind = botState.team === 'red' ? (ballPos.z > botBody.position.z + 1) : (ballPos.z < botBody.position.z - 1);
-
-        if (isBallBehind) {
-          // Move to a position behind the ball first
-          targetZ = ballPos.z + (botState.team === 'red' ? 4 : -4);
-          // Add some horizontal offset to avoid running into the ball while repositioning
-          if (Math.abs(toBallX) < 2) {
-            targetX = ballPos.x + (toBallX > 0 ? -4 : 4);
-          }
-        }
-        
-        // In standard non-training matches, make chaser movement slightly inaccurate
-        if (!room.isTraining) {
-            targetX += (Math.random() - 0.5) * 3;
-            targetZ += (Math.random() - 0.5) * 3;
-        }
-      } else {
-        // Defender Logic
-        // Stay between the ball and our goal, staying back
-        targetZ = ourGoalZ + (botState.team === 'red' ? -6 : 6);
-        targetX = ballPos.x * 0.4; // Follow the X position loosely
-        targetX = Math.max(-4, Math.min(4, targetX)); // Stay within goal posts
-      }
 
       const dirX = targetX - botBody.position.x;
       const dirZ = targetZ - botBody.position.z;
       const dist = Math.sqrt(dirX * dirX + dirZ * dirZ);
 
       if (dist > 0.5) {
-        input.x = dirX / dist;
-        input.z = dirZ / dist;
-        
-        // Very Easy logic: sluggish speed for general play
-        if (!room.isTraining) {
-          // Occasional hesitation
-          if (Math.random() < 0.3) {
-             input.x *= 0.3;
-             input.z *= 0.3;
-          }
-        }
+        // Reduce speed based on difficulty
+        let speedMult = room.difficulty === 'easy' ? 0.4 : room.difficulty === 'medium' ? 0.7 : 1.0;
+        if (isFillBot) speedMult = 1; // Fill bots walk very slowly
+        input.x = (dirX / dist) * speedMult;
+        input.z = (dirZ / dist) * speedMult;
       } else {
         input.x = 0;
         input.z = 0;
       }
 
       // Kicking logic
-      if (distToBall < 3.0) {
+      input.kick = false; // Reset kick by default
+      if (distToBall < 2.5) {
         const toGoalX = 0 - botBody.position.x;
         const toGoalZ = opponentGoalZ - botBody.position.z;
-        const dot = (toBallX * toGoalX + toBallZ * toGoalZ);
         
-        if (role === 'defender') {
-          // Defenders just clear the ball if it comes near them
-          input.kick = true;
-          input.cameraAngle = Math.atan2(-toGoalX, -toGoalZ);
-        } else {
-          // Chasers kick if headed roughly towards goal
-          if (dot > 0 || room.difficulty === 'hard') {
+        const isBehindBall = botState.team === 'red' ? (botBody.position.z > ballPos.z - 0.5) : (botBody.position.z < ballPos.z + 0.5);
+
+        if (isBehindBall) {
+          // Check if ball is between bot and own goal
+          const toOwnGoalZ = ownGoalZ - ballPos.z;
+          const toOpponentGoalZ = opponentGoalZ - ballPos.z;
+          
+          // Only kick if we are closer to the opponent's goal than our own goal,
+          // or if the ball is not dangerously close to our own goal.
+          const isFacingOwnGoal = Math.abs(toOwnGoalZ) < Math.abs(toOpponentGoalZ);
+          
+          // Easy bots sometimes forget to kick or miss
+          if ((room.difficulty !== 'easy' || Math.random() > 0.4) && !isFacingOwnGoal) {
             input.kick = true;
-            input.cameraAngle = Math.atan2(-toGoalX, -toGoalZ);
+            // Add error to kick angle for easier difficulties
+            const aimError = room.difficulty === 'easy' ? (Math.random() - 0.5) * 1.5 : room.difficulty === 'medium' ? (Math.random() - 0.5) * 0.5 : 0;
+            input.cameraAngle = Math.atan2(toGoalX, toGoalZ) + aimError;
           }
         }
       }
@@ -523,9 +481,10 @@ function updateBots(room: Room) {
       // Random jumps for Hard difficulty
       if (room.difficulty === 'hard' && Math.random() < 0.01 && botBody.position.y < 1.1) {
         input.jump = true;
+      } else {
+        input.jump = false;
       }
     }
-  }
 }
 
 async function startServer() {
@@ -546,7 +505,7 @@ async function startServer() {
 
   const allowedOrigins = process.env.ALLOWED_ORIGINS 
     ? process.env.ALLOWED_ORIGINS.split(",") 
-    : ["http://localhost:5173", "http://localhost:3000"];
+    : ["http://localhost:5173", "http://localhost:3000", "https://soccer-rivals.vercel.app"];
     
   app.use(cors({
     origin: allowedOrigins,
@@ -571,8 +530,8 @@ async function startServer() {
   });
 
   const playerRooms = new Map<string, string>(); // socket.id -> roomId
-  const matchmakingQueue: string[] = [];
-  const worldCupQueue: string[] = [];
+  const matchmakingQueue: { id: string, time: number }[] = [];
+  const worldCupQueue: { id: string, time: number }[] = [];
 
   const freePlayRoom = createRoom('FREEPLAY', false);
   freePlayRoom.gameState.matchState = 'freeplay';
@@ -588,14 +547,16 @@ async function startServer() {
     const roomId = playerRooms.get(socket.id);
     if (!roomId) return;
     
-    const queueIndex = matchmakingQueue.indexOf(socket.id);
+    const queueIndex = matchmakingQueue.findIndex(q => q.id === socket.id);
     if (queueIndex !== -1) matchmakingQueue.splice(queueIndex, 1);
     
-    const wcQueueIndex = worldCupQueue.indexOf(socket.id);
+    const wcQueueIndex = worldCupQueue.findIndex(q => q.id === socket.id);
     if (wcQueueIndex !== -1) worldCupQueue.splice(wcQueueIndex, 1);
 
     const room = rooms.get(roomId);
     if (!room) return;
+
+    const leavingPlayerTeam = room.gameState.players[socket.id]?.team;
 
     if (room.playerBodies[socket.id]) {
       room.world.removeBody(room.playerBodies[socket.id]);
@@ -608,45 +569,33 @@ async function startServer() {
     io.to(roomId).emit("playerLeft", socket.id);
     playerRooms.delete(socket.id);
 
-    if (Object.keys(room.gameState.players).length === 0 && roomId !== 'FREEPLAY' && roomId !== 'WORLD_CUP_FREEPLAY') {
+    const humanCount = Object.values(room.gameState.players).filter(p => !room.botIds.includes(p.id)).length;
+
+    if (humanCount === 0 && roomId !== 'FREEPLAY' && roomId !== 'WORLD_CUP_FREEPLAY') {
       rooms.delete(roomId); // Clean up empty room
     } else if (roomId !== 'FREEPLAY' && roomId !== 'WORLD_CUP_FREEPLAY') {
-      const blueCount = Object.values(room.gameState.players).filter(p => p.team === 'blue').length;
-      const redCount = Object.values(room.gameState.players).filter(p => p.team === 'red').length;
+      if (!room.isPrivate && !room.isTraining && leavingPlayerTeam) {
+         addBot(room, leavingPlayerTeam, true);
+      } else if (room.isPrivate || room.isTraining) {
+        const blueCount = Object.values(room.gameState.players).filter(p => p.team === 'blue').length;
+        const redCount = Object.values(room.gameState.players).filter(p => p.team === 'red').length;
 
-      if ((room.gameState.matchState === 'playing' || room.gameState.matchState === 'countdown') && (blueCount === 0 || redCount === 0)) {
-        room.gameState.matchState = 'gameover';
-        if (blueCount === 0 && redCount > 0) {
-          room.gameState.message = 'RED WINS (OPPONENT LEFT)!';
-        } else if (redCount === 0 && blueCount > 0) {
-          room.gameState.message = 'BLUE WINS (OPPONENT LEFT)!';
-        } else {
-          room.gameState.message = 'MATCH ENDED';
+        if ((room.gameState.matchState === 'playing' || room.gameState.matchState === 'countdown') && (blueCount === 0 || redCount === 0)) {
+          room.gameState.matchState = 'gameover';
+          if (blueCount === 0 && redCount > 0) {
+            room.gameState.message = 'RED WINS (OPPONENT LEFT)!';
+          } else if (redCount === 0 && blueCount > 0) {
+            room.gameState.message = 'BLUE WINS (OPPONENT LEFT)!';
+          } else {
+            room.gameState.message = 'MATCH ENDED';
+          }
+          room.stateTimer = 5;
         }
-        room.stateTimer = 5;
       }
     }
   }
 
-  function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: string) {
-    if (room.botIds.length > 0) {
-      const maxPlayers = room.isWorldCup ? 2 : 4;
-      const currentTotal = Object.keys(room.gameState.players).length;
-      if (currentTotal >= maxPlayers) {
-        const botIdToRemove = room.botIds[0];
-        
-        if (room.playerBodies[botIdToRemove]) {
-          room.world.removeBody(room.playerBodies[botIdToRemove]);
-          delete room.playerBodies[botIdToRemove];
-        }
-        delete room.playerInputs[botIdToRemove];
-        delete room.gameState.players[botIdToRemove];
-        room.botIds = room.botIds.filter(id => id !== botIdToRemove);
-        
-        io.to(room.id).emit("playerLeft", botIdToRemove);
-      }
-    }
-
+function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: string, character: string = 'robot') {
     socket.join(room.id);
     playerRooms.set(socket.id, room.id);
 
@@ -669,7 +618,7 @@ async function startServer() {
 
     const playerBody = new CANNON.Body({
       mass: 5,
-      shape: new CANNON.Box(new CANNON.Vec3(0.5, 1, 0.5)),
+      shape: new CANNON.Box(getPlayerDimensions(character)),
       position: new CANNON.Vec3((Math.random() - 0.5) * 10, 1, startZ),
       material: room.playerMaterial,
       fixedRotation: true,
@@ -690,7 +639,7 @@ async function startServer() {
       score: 0,
       lastKickTime: 0,
       lastJumpTime: 0,
-      character: 'robot',
+      character,
       goals: 0,
       assists: 0,
       kicks: 0,
@@ -701,12 +650,10 @@ async function startServer() {
     socket.to(room.id).emit("playerJoined", room.gameState.players[socket.id]);
   }
 
-  const chatRateLimits = new Map<string, number[]>();
-
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
-    socket.on("joinQueue", ({ name, worldCupCountry, isWorldCup }: { name: string, worldCupCountry?: string, isWorldCup?: boolean }) => {
+    socket.on("joinQueue", ({ name, worldCupCountry, isWorldCup, character }: { name: string, worldCupCountry?: string, isWorldCup?: boolean, character?: string }) => {
       leaveRoom(socket);
       
       const queue = isWorldCup ? worldCupQueue : matchmakingQueue;
@@ -714,8 +661,8 @@ async function startServer() {
       // 1. Try to find an existing public match with space
       let targetRoom: Room | null = null;
       for (const room of rooms.values()) {
-        if (room.id !== 'FREEPLAY' && room.id !== 'WORLD_CUP_FREEPLAY' && !room.isPrivate && room.isWorldCup === !!isWorldCup) {
-          const humanCount = Object.keys(room.gameState.players).filter(id => !room.botIds.includes(id)).length;
+        if (room.id !== 'FREEPLAY' && room.id !== 'WORLD_CUP_FREEPLAY' && !room.isPrivate && !room.isTraining && room.isWorldCup === !!isWorldCup) {
+          const humanCount = Object.values(room.gameState.players).filter(p => !room.botIds.includes(p.id)).length;
           const maxPlayers = isWorldCup ? 2 : 4;
           if (humanCount < maxPlayers && room.gameState.matchState !== 'gameover') {
             targetRoom = room;
@@ -726,34 +673,43 @@ async function startServer() {
 
       if (targetRoom) {
         console.log(`Filling existing ${isWorldCup ? 'World Cup ' : ''}room ${targetRoom.id} with player ${socket.id}`);
-        joinRoom(socket, targetRoom, name, worldCupCountry);
+        const playerCount = Object.keys(targetRoom.gameState.players).length;
+        const maxPlayers = isWorldCup ? 2 : 4;
+        if (playerCount >= maxPlayers && targetRoom.botIds.length > 0) {
+          const botIdToRemove = targetRoom.botIds.pop()!;
+          targetRoom.world.removeBody(targetRoom.playerBodies[botIdToRemove]);
+          delete targetRoom.playerBodies[botIdToRemove];
+          delete targetRoom.playerInputs[botIdToRemove];
+          delete targetRoom.gameState.players[botIdToRemove];
+        }
+        joinRoom(socket, targetRoom, name, worldCupCountry, character);
       } else {
         // 2. Fallback to Freeplay + Queue
         const fpRoom = isWorldCup ? worldCupFreePlayRoom : freePlayRoom;
-        joinRoom(socket, fpRoom, name, worldCupCountry);
-        queue.push(socket.id);
+        joinRoom(socket, fpRoom, name, worldCupCountry, character);
+        queue.push({ id: socket.id, time: Date.now() });
       }
     });
 
-    socket.on("createPrivateRoom", ({ name, worldCupCountry, isWorldCup }: { name: string, worldCupCountry?: string, isWorldCup?: boolean }) => {
+    socket.on("createPrivateRoom", ({ name, worldCupCountry, isWorldCup, character }: { name: string, worldCupCountry?: string, isWorldCup?: boolean, character?: string }) => {
       leaveRoom(socket);
       const newRoomId = generateRoomCode();
       const room = createRoom(newRoomId, true, false, 'medium', !!isWorldCup);
       room.gameState.matchState = 'freeplay';
       room.gameState.message = `ROOM: ${newRoomId}\nWAITING FOR PLAYERS...`;
       rooms.set(newRoomId, room);
-      joinRoom(socket, room, name, worldCupCountry);
+      joinRoom(socket, room, name, worldCupCountry, character);
       socket.emit("roomCreated", newRoomId);
     });
 
-    socket.on("startTraining", ({ name, difficulty, worldCupCountry, isWorldCup }: { name: string, difficulty: 'easy' | 'medium' | 'hard', worldCupCountry?: string, isWorldCup?: boolean }) => {
+    socket.on("startTraining", ({ name, difficulty, worldCupCountry, isWorldCup, character }: { name: string, difficulty: 'easy' | 'medium' | 'hard', worldCupCountry?: string, isWorldCup?: boolean, character?: string }) => {
       leaveRoom(socket);
       const trainingRoomId = `TRAIN_${generateRoomCode()}`;
       const room = createRoom(trainingRoomId, true, true, difficulty, !!isWorldCup);
       rooms.set(trainingRoomId, room);
       
       // Join the human player
-      joinRoom(socket, room, name, worldCupCountry);
+      joinRoom(socket, room, name, worldCupCountry, character);
       
       // Add the bot to the opposite team
       const humanPlayer = room.gameState.players[socket.id];
@@ -763,11 +719,11 @@ async function startServer() {
       socket.emit("roomCreated", trainingRoomId);
     });
 
-    socket.on("joinPrivateRoom", ({ name, roomCode, worldCupCountry }: { name: string, roomCode: string, worldCupCountry?: string }) => {
+    socket.on("joinPrivateRoom", ({ name, roomCode, worldCupCountry, character }: { name: string, roomCode: string, worldCupCountry?: string, character?: string }) => {
       leaveRoom(socket);
       const room = rooms.get(roomCode.toUpperCase());
       if (room && room.isPrivate && Object.keys(room.gameState.players).length < 4) {
-        joinRoom(socket, room, name, worldCupCountry);
+        joinRoom(socket, room, name, worldCupCountry, character);
         if (room.gameState.matchState === 'freeplay' && room.id !== 'FREEPLAY') {
           room.gameState.message = `ROOM: ${room.id}\nWAITING FOR PLAYERS...`;
         }
@@ -792,19 +748,6 @@ async function startServer() {
 
     socket.on("chat", (message: string) => {
       if (message.length > 100) return;
-      
-      const now = Date.now();
-      const timestamps = chatRateLimits.get(socket.id) || [];
-      const recentTimestamps = timestamps.filter(t => now - t < 10000); // within last 10 seconds
-      
-      if (recentTimestamps.length >= 5) {
-        socket.emit("error", "Chat rate limit exceeded. Please wait.");
-        return;
-      }
-      
-      recentTimestamps.push(now);
-      chatRateLimits.set(socket.id, recentTimestamps);
-
       const roomId = playerRooms.get(socket.id);
       if (roomId) {
         const room = rooms.get(roomId);
@@ -826,7 +769,6 @@ async function startServer() {
 
     socket.on("disconnect", () => {
       console.log("User disconnected:", socket.id);
-      chatRateLimits.delete(socket.id);
       leaveRoom(socket);
     });
   });
@@ -834,12 +776,14 @@ async function startServer() {
   // Physics Loop
   setInterval(() => {
     // Matchmaking check: Try to fill existing rooms first
-    const processQueue = (queue: string[], isWorldCup: boolean) => {
+    const processQueue = (queue: { id: string, time: number }[], isWorldCup: boolean) => {
       if (queue.length > 0) {
+        const now = Date.now();
         const playersToRemove: string[] = [];
         
-        for (let i = 0; i < queue.length; i++) {
-          const pid = queue[i];
+        const queueCopy = [...queue];
+        for (let i = 0; i < queueCopy.length; i++) {
+          const { id: pid, time } = queueCopy[i];
           const s = io.sockets.sockets.get(pid);
           if (!s) {
             playersToRemove.push(pid);
@@ -849,8 +793,8 @@ async function startServer() {
           // Try to find a room for this queued player
           let targetRoom: Room | null = null;
           for (const room of rooms.values()) {
-            if (room.id !== 'FREEPLAY' && room.id !== 'WORLD_CUP_FREEPLAY' && !room.isPrivate && room.isWorldCup === isWorldCup) {
-              const humanCount = Object.keys(room.gameState.players).filter(id => !room.botIds.includes(id)).length;
+            if (room.id !== 'FREEPLAY' && room.id !== 'WORLD_CUP_FREEPLAY' && !room.isPrivate && !room.isTraining && room.isWorldCup === isWorldCup) {
+              const humanCount = Object.values(room.gameState.players).filter(p => !room.botIds.includes(p.id)).length;
               const maxPlayers = isWorldCup ? 2 : 4;
               if (humanCount < maxPlayers && room.gameState.matchState !== 'gameover') {
                 targetRoom = room;
@@ -863,40 +807,89 @@ async function startServer() {
             const sourceRoom = isWorldCup ? worldCupFreePlayRoom : freePlayRoom;
             const name = sourceRoom.gameState.players[pid]?.name || 'Player';
             const worldCupCountry = sourceRoom.gameState.players[pid]?.worldCupCountry;
+            const character = sourceRoom.gameState.players[pid]?.character || 'robot';
             leaveRoom(s);
-            joinRoom(s, targetRoom, name, worldCupCountry);
+            
+            // If room is full of bots, remove a bot to make space
+            const playerCount = Object.keys(targetRoom.gameState.players).length;
+            const maxPlayers = isWorldCup ? 2 : 4;
+            if (playerCount >= maxPlayers && targetRoom.botIds.length > 0) {
+              const botIdToRemove = targetRoom.botIds.pop()!;
+              targetRoom.world.removeBody(targetRoom.playerBodies[botIdToRemove]);
+              delete targetRoom.playerBodies[botIdToRemove];
+              delete targetRoom.playerInputs[botIdToRemove];
+              delete targetRoom.gameState.players[botIdToRemove];
+            }
+
+            joinRoom(s, targetRoom, name, worldCupCountry, character);
+            playersToRemove.push(pid);
+          } else if (now - time > 5000) {
+            // Wait 10 seconds, then create a room with bots
+            const matchRoomId = generateRoomCode();
+            const matchRoom = createRoom(matchRoomId, false, false, 'medium', isWorldCup);
+            rooms.set(matchRoomId, matchRoom);
+
+            const sourceRoom = isWorldCup ? worldCupFreePlayRoom : freePlayRoom;
+            const name = sourceRoom.gameState.players[pid]?.name || 'Player';
+            const worldCupCountry = sourceRoom.gameState.players[pid]?.worldCupCountry;
+            const character = sourceRoom.gameState.players[pid]?.character || 'robot';
+            leaveRoom(s);
+            joinRoom(s, matchRoom, name, worldCupCountry, character);
+            
+            // Fill with bots
+            const maxPlayers = isWorldCup ? 2 : 4;
+            for (let j = 1; j < maxPlayers; j++) {
+               const teamCount = Object.values(matchRoom.gameState.players).reduce(
+                 (acc, p) => { acc[p.team]++; return acc; },
+                 { red: 0, blue: 0 }
+               );
+               const botTeam = teamCount.red <= teamCount.blue ? 'red' : 'blue';
+               addBot(matchRoom, botTeam, true);
+            }
+
             playersToRemove.push(pid);
           }
         }
 
         // Clean up queue
         for (const pid of playersToRemove) {
-          const idx = queue.indexOf(pid);
+          const idx = queue.findIndex(q => q.id === pid);
           if (idx !== -1) queue.splice(idx, 1);
         }
       }
 
-      // If still have enough for a new match
-      if (queue.length >= 1) {
-        const maxPlayers = isWorldCup ? 2 : 4;
-        const playersToMove = [];
-        while (queue.length > 0 && playersToMove.length < maxPlayers) {
-          playersToMove.push(queue.shift()!);
-        }
+      // If still have enough for a new match without waiting 10s
+      if (queue.length >= 2) {
+        const p1 = queue.shift()!;
+        const p2 = queue.shift()!;
         
         const matchRoomId = generateRoomCode();
         const matchRoom = createRoom(matchRoomId, false, false, 'medium', isWorldCup);
         rooms.set(matchRoomId, matchRoom);
 
+        const playersToMove = [p1.id, p2.id];
         const sourceRoom = isWorldCup ? worldCupFreePlayRoom : freePlayRoom;
         for (const pid of playersToMove) {
           const s = io.sockets.sockets.get(pid);
           if (s) {
             const name = sourceRoom.gameState.players[pid]?.name || 'Player';
             const worldCupCountry = sourceRoom.gameState.players[pid]?.worldCupCountry;
+            const character = sourceRoom.gameState.players[pid]?.character || 'robot';
             leaveRoom(s);
-            joinRoom(s, matchRoom, name, worldCupCountry);
+            joinRoom(s, matchRoom, name, worldCupCountry, character);
           }
+        }
+        
+        // If it's a 4 player match and we only have 2, fill the rest with bots
+        if (!isWorldCup) {
+            for (let j = 2; j < 4; j++) {
+               const teamCount = Object.values(matchRoom.gameState.players).reduce(
+                 (acc, p) => { acc[p.team]++; return acc; },
+                 { red: 0, blue: 0 }
+               );
+               const botTeam = teamCount.red <= teamCount.blue ? 'red' : 'blue';
+               addBot(matchRoom, botTeam, true);
+            }
         }
       }
     };
@@ -907,6 +900,7 @@ async function startServer() {
     for (const room of rooms.values()) {
       room.ticks++;
       
+      // Update AI
       if (room.botIds.length > 0) {
         updateBots(room);
       }
@@ -914,47 +908,15 @@ async function startServer() {
       if (room.ticks >= TICK_RATE) {
         room.ticks = 0;
         
-        if (room.gameState.matchState === 'waiting' || (room.gameState.matchState === 'freeplay' && room.id !== 'FREEPLAY' && room.id !== 'WORLD_CUP_FREEPLAY')) {
-          const maxPlayers = room.isWorldCup ? 2 : 4;
-          const currentTotal = Object.keys(room.gameState.players).length;
-          const humanCount = Object.keys(room.gameState.players).filter(id => !room.botIds.includes(id)).length;
-
-          const readyToStart = room.isPrivate ? (currentTotal >= 2) : (currentTotal >= maxPlayers);
-
-          if (readyToStart) {
+        if (room.gameState.matchState === 'waiting' || (room.gameState.matchState === 'freeplay' && room.id !== 'FREEPLAY')) {
+          if (Object.keys(room.gameState.players).length >= 2) {
             room.gameState.matchState = 'countdown';
             room.gameState.timer = 5;
             room.gameState.message = '';
             room.gameState.score = { red: 0, blue: 0 };
             room.gameState.isOvertime = false;
-            room.waitingTicks = 0;
             delete room.gameState.lastScorer;
             room.resetPositions();
-          } else if (!room.isPrivate && humanCount > 0 && humanCount < maxPlayers) {
-            room.waitingTicks = (room.waitingTicks || 0) + TICK_RATE;
-            
-            if (room.waitingTicks >= 10 * TICK_RATE) {
-              while (Object.keys(room.gameState.players).length < maxPlayers) {
-                const teamCount = Object.values(room.gameState.players).reduce(
-                  (acc, p) => { acc[p.team]++; return acc; },
-                  { red: 0, blue: 0 }
-                );
-                const team = teamCount.red <= teamCount.blue ? 'red' : 'blue';
-                addBot(room, team, true);
-              }
-              room.gameState.matchState = 'countdown';
-              room.gameState.timer = 5;
-              room.gameState.message = '';
-              room.gameState.score = { red: 0, blue: 0 };
-              room.gameState.isOvertime = false;
-              room.waitingTicks = 0;
-              delete room.gameState.lastScorer;
-              room.resetPositions();
-            } else {
-              room.gameState.message = `Waiting for players...`;
-            }
-          } else {
-            room.waitingTicks = 0;
           }
         } else if (room.gameState.matchState === 'countdown') {
           room.gameState.timer--;
@@ -973,12 +935,37 @@ async function startServer() {
               room.gameState.message = 'OVERTIME!';
             } else {
               room.gameState.matchState = 'gameover';
+              let winner: 'red' | 'blue' | 'draw' = 'draw';
               if (room.gameState.score.blue > room.gameState.score.red) {
                 room.gameState.message = 'BLUE WINS!';
+                winner = 'blue';
               } else if (room.gameState.score.red > room.gameState.score.blue) {
                 room.gameState.message = 'RED WINS!';
+                winner = 'red';
               } else {
                 room.gameState.message = 'DRAW!';
+                winner = 'draw';
+              }
+
+              // Reward players
+              for (const id in room.gameState.players) {
+                const player = room.gameState.players[id];
+                const socket = io.sockets.sockets.get(id);
+                if (socket && !id.startsWith('bot-')) {
+                  let coins = 0;
+                  let exp = 0;
+                  if (winner === 'draw') {
+                    coins = 15;
+                    exp = 5;
+                  } else if (player.team === winner) {
+                    coins = 35;
+                    exp = 10;
+                  } else {
+                    coins = 5;
+                    exp = 2;
+                  }
+                  socket.emit('reward', { coins, exp });
+                }
               }
               room.stateTimer = 5;
             }
@@ -989,6 +976,25 @@ async function startServer() {
           if (room.stateTimer <= 0) {
             if (room.gameState.isOvertime) {
               room.gameState.matchState = 'gameover';
+              let winner: 'red' | 'blue' = room.gameState.score.blue > room.gameState.score.red ? 'blue' : 'red';
+              
+              // Reward players
+              for (const id in room.gameState.players) {
+                const player = room.gameState.players[id];
+                const socket = io.sockets.sockets.get(id);
+                if (socket && !id.startsWith('bot-')) {
+                  let coins = 0;
+                  let exp = 0;
+                  if (player.team === winner) {
+                    coins = 35;
+                    exp = 10;
+                  } else {
+                    coins = 5;
+                    exp = 2;
+                  }
+                  socket.emit('reward', { coins, exp });
+                }
+              }
               room.stateTimer = 5;
             } else {
               room.resetPositions();
