@@ -1039,11 +1039,18 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
             
             if (input.jump) {
               if (body.position.y <= 1.1) {
-                body.velocity.y = 8;
+                body.velocity.y = 10; // Increased initial jump velocity
                 const state = room.gameState.players[id];
                 if (state) state.lastJumpTime = Date.now();
               }
               input.jump = false;
+            }
+
+            // Refine jump gravity: apply extra downward force when in the air
+            if (body.position.y > 1.1) {
+              // Apply more gravity when falling for a snappier feel
+              const extraGravity = body.velocity.y < 0 ? -25 : -15;
+              body.applyForce(new CANNON.Vec3(0, extraGravity * body.mass, 0), body.position);
             }
 
             if (input.kick) {
