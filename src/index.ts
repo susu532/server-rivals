@@ -13,7 +13,9 @@ import http from "http";
 import path from "path";
 import fs from "fs";
 import * as CANNON from "cannon-es";
+import helmet from "helmet";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 
 const PORT = Number(process.env.PORT) || 3000;
 const TICK_RATE = 60;
@@ -490,16 +492,39 @@ async function startServer() {
 
   // Security Middlewares
   app.set("trust proxy", 1); // Trust first proxy (Render/Vercel)
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          "img-src": ["'self'", "data:", "https://flagcdn.com"],
+        },
+      },
+    })
+  );
 
+  const allowedOrigins = process.env.ALLOWED_ORIGINS 
+    ? process.env.ALLOWED_ORIGINS.split(",") 
+    : ["http://localhost:5173", "http://localhost:3000", "https://soccer-rivals.vercel.app"];
+    
   app.use(cors({
-    origin: "*",
+    origin: allowedOrigins,
     methods: ["GET", "POST"]
   }));
+
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    limit: 100, // Limit each IP to 100 requests per 15 minutes
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+  });
+  
+  app.use('/api/', apiLimiter);
 
   const server = http.createServer(app);
   const io = new SocketIOServer(server, { 
     cors: { 
-      origin: "*",
+      origin: allowedOrigins,
       methods: ["GET", "POST"]
     } 
   });
