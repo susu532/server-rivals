@@ -404,17 +404,33 @@ function updateBots(room: Room) {
     const isFillBot = !room.isTraining;
 
     if (isAttacker) {
-      const teamDir = botState.team === 'red' ? -1 : 1;
+      // Vector from goal to ball
+      const goalToBallX = ballPos.x - 0;
+      const goalToBallZ = ballPos.z - opponentGoalZ;
+      const len = Math.sqrt(goalToBallX * goalToBallX + goalToBallZ * goalToBallZ) || 1;
+      
+      // Ideal position to strike from (behind the ball relative to the goal)
+      const idealStrikeX = ballPos.x + (goalToBallX / len) * 2.5;
+      const idealStrikeZ = ballPos.z + (goalToBallZ / len) * 2.5;
+      
       const isAheadOfBall = botState.team === 'red' ? (botBody.position.z < ballPos.z - 0.5) : (botBody.position.z > ballPos.z + 0.5);
 
       if (isAheadOfBall) {
-        // Loop around to get behind the ball
-        targetZ = ballPos.z - teamDir * 4;
-        targetX = ballPos.x + (botBody.position.x > ballPos.x ? 3 : -3);
+        // Loop around to get behind the ball without pushing it backwards
+        targetZ = idealStrikeZ;
+        targetX = idealStrikeX + (botBody.position.x > ballPos.x ? 3 : -3);
       } else {
-        // We are behind the ball, push it towards the goal
-        targetX = ballPos.x;
-        targetZ = ballPos.z;
+        // We are behind the ball
+        const distToIdeal = Math.sqrt(Math.pow(idealStrikeX - botBody.position.x, 2) + Math.pow(idealStrikeZ - botBody.position.z, 2));
+        if (distToIdeal > 2.5) {
+           // Move towards the ideal strike position to line up the shot
+           targetX = idealStrikeX;
+           targetZ = idealStrikeZ;
+        } else {
+           // Drive straight through the ball towards the goal
+           targetX = ballPos.x;
+           targetZ = ballPos.z;
+        }
       }
 
       if (room.difficulty === 'easy' && !isFillBot) {
@@ -422,27 +438,36 @@ function updateBots(room: Room) {
          targetZ += (Math.random() - 0.5) * 2;
       }
     } else {
-      // Defender Logic (strictly stay at goal)
-      targetZ = botState.team === 'red' ? 15 : -15;
-      if (isFillBot) {
-         // Fill bot defender wanders slightly near goal
-         const timeSec = Date.now() / 1000;
-         const botUniqueOffset = botBody.id * 10;
-         targetX = Math.cos(timeSec * 0.3 + botUniqueOffset) * 4;
-      } else {
-         // Training bot defender tracks ball X
+      // Defender Logic
+      const distToOwnGoal = Math.abs(ballPos.z - ownGoalZ);
+      
+      if (distToOwnGoal < 12) {
+         // Danger zone: step out to intercept, staying between ball and goal
+         targetZ = botState.team === 'red' ? Math.max(ballPos.z + 1, 14) : Math.min(ballPos.z - 1, -14);
          const trackingError = room.difficulty === 'easy' ? (Math.random() - 0.5) * 4 : 0;
          targetX = Math.max(-4, Math.min(4, ballPos.x + trackingError));
+      } else {
+         // Calm defending: stay deep in the goal, track ball loosely
+         targetZ = botState.team === 'red' ? 17 : -17;
+         if (isFillBot) {
+            const timeSec = Date.now() / 1000;
+            const botUniqueOffset = botBody.id * 10;
+            targetX = Math.cos(timeSec * 0.3 + botUniqueOffset) * 2;
+         } else {
+            // Track ball X but dampen it so they stay calm and centered
+            const trackingError = room.difficulty === 'easy' ? (Math.random() - 0.5) * 4 : 0;
+            targetX = Math.max(-2, Math.min(2, ballPos.x * 0.3 + trackingError));
+         }
       }
     }
 
       const dirX = targetX - botBody.position.x;
       const dirZ = targetZ - botBody.position.z;
-      const dist = Math.sqrt(dirX * dirX + dirZ * dirZ);
+      const dist = Math.sqrt(dirX * dirX + dirZ * dirZ) || 1;
 
       if (dist > 0.5) {
         // Reduce speed based on difficulty
-        let speedMult = room.difficulty === 'easy' ? 0.4 : room.difficulty === 'medium' ? 0.7 : 1.0;
+        let speedMult = room.difficulty === 'easy' ? 0.4 : room.difficulty === 'medium' ? 0.75 : 1.0;
         if (isFillBot) speedMult = 1; // Fill bots walk very slowly
         input.x = (dirX / dist) * speedMult;
         input.z = (dirZ / dist) * speedMult;
@@ -458,8 +483,9 @@ function updateBots(room: Room) {
         const toGoalZ = opponentGoalZ - botBody.position.z;
         
         const isBehindBall = botState.team === 'red' ? (botBody.position.z > ballPos.z - 0.5) : (botBody.position.z < ballPos.z + 0.5);
+        const isDefenderClearing = !isAttacker && Math.abs(ballPos.z - ownGoalZ) < 12;
 
-        if (isBehindBall) {
+        if (isBehindBall || isDefenderClearing) {
           // Check if ball is between bot and own goal
           const toOwnGoalZ = ownGoalZ - ballPos.z;
           const toOpponentGoalZ = opponentGoalZ - ballPos.z;
@@ -468,12 +494,20 @@ function updateBots(room: Room) {
           // or if the ball is not dangerously close to our own goal.
           const isFacingOwnGoal = Math.abs(toOwnGoalZ) < Math.abs(toOpponentGoalZ);
           
-          // Easy bots sometimes forget to kick or miss
-          if ((room.difficulty !== 'easy' || Math.random() > 0.4) && !isFacingOwnGoal) {
+          if (isDefenderClearing || ((room.difficulty !== 'easy' || Math.random() > 0.4) && !isFacingOwnGoal)) {
             input.kick = true;
             // Add error to kick angle for easier difficulties
             const aimError = room.difficulty === 'easy' ? (Math.random() - 0.5) * 1.5 : room.difficulty === 'medium' ? (Math.random() - 0.5) * 0.5 : 0;
-            input.cameraAngle = Math.atan2(toGoalX, toGoalZ) + aimError;
+            
+            if (isDefenderClearing && !isBehindBall) {
+               // If clearing and not behind the ball, kick it sideways and away from goal
+               const clearDirX = ballPos.x > 0 ? 1 : -1; // Kick towards the nearest wall
+               const clearDirZ = botState.team === 'red' ? -1 : 1; // Kick towards opponent half
+               input.cameraAngle = Math.atan2(-clearDirX, -clearDirZ) + aimError;
+            } else {
+               // Use -toGoalX and -toGoalZ so the kick direction is TOWARDS the goal
+               input.cameraAngle = Math.atan2(-toGoalX, -toGoalZ) + aimError;
+            }
           }
         }
       }
@@ -1088,6 +1122,22 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
                   room.lastTouchId = id;
                 }
               }
+            }
+
+            // Prevent standing on the ball
+            const dx = body.position.x - room.ballBody.position.x;
+            const dz = body.position.z - room.ballBody.position.z;
+            const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+            if (body.position.y > room.ballBody.position.y + 0.3 && horizontalDistance < 1.2) {
+              const pushDir = new CANNON.Vec3(dx, 0, dz);
+              if (pushDir.length() < 0.01) {
+                pushDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+              }
+              pushDir.normalize();
+              // Push the player off the ball horizontally
+              body.applyForce(pushDir.scale(200), body.position);
+              // Also push the ball away slightly
+              room.ballBody.applyForce(pushDir.scale(-50), room.ballBody.position);
             }
           }
         }
