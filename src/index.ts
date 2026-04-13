@@ -116,7 +116,7 @@ function createRoom(roomId: string, isPrivate: boolean, isTraining: boolean = fa
   const wallHeight = 20;
   const goalWidth = 8;
   const goalDepth = 2;
-  const goalHeight = 3;
+  const goalHeight = 3.6;
 
   const createWall = (x: number, y: number, z: number, width: number, height: number, depth: number) => {
     const wall = new CANNON.Body({
@@ -1139,6 +1139,27 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
               // Also push the ball away slightly
               room.ballBody.applyForce(pushDir.scale(-50), room.ballBody.position);
             }
+
+            // Prevent standing on other players
+            for (const otherId in room.playerBodies) {
+              if (id !== otherId) {
+                const otherBody = room.playerBodies[otherId];
+                const pdx = body.position.x - otherBody.position.x;
+                const pdz = body.position.z - otherBody.position.z;
+                const pHorizontalDistance = Math.sqrt(pdx * pdx + pdz * pdz);
+                
+                // If this player is significantly higher and horizontally close
+                if (body.position.y > otherBody.position.y + 0.5 && pHorizontalDistance < 1.0) {
+                  const pushDir = new CANNON.Vec3(pdx, 0, pdz);
+                  if (pushDir.length() < 0.01) {
+                    pushDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+                  }
+                  pushDir.normalize();
+                  // Push the top player off
+                  body.applyForce(pushDir.scale(150), body.position);
+                }
+              }
+            }
           }
         }
       } else {
@@ -1157,7 +1178,7 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
 
       if (room.gameState.matchState === 'playing' || room.gameState.matchState === 'freeplay') {
         const goalWidth = 8;
-        const goalHeight = 3;
+        const goalHeight = 3.6;
         const ballRadius = 0.5;
         
         const isInsideWidth = Math.abs(room.ballBody.position.x) < (goalWidth / 2);
