@@ -300,19 +300,51 @@ function getPlayerDimensions(character: string) {
   return new CANNON.Vec3(0.5, 1, 0.5);
 }
 
+function createPlayerBody(character: string, startZ: number, material: CANNON.Material) {
+  const dims = getPlayerDimensions(character);
+  const radius = dims.x;
+  const halfHeight = dims.y;
+  const totalHeight = halfHeight * 2;
+  
+  const body = new CANNON.Body({
+    mass: 5,
+    material: material,
+    fixedRotation: true,
+    linearDamping: 0.9,
+    position: new CANNON.Vec3((Math.random() - 0.5) * 10, halfHeight, startZ),
+  });
+
+  // Cylinder for the middle
+  const cylinderHeight = totalHeight - radius * 2;
+  if (cylinderHeight > 0) {
+    const cylinderShape = new CANNON.Cylinder(radius, radius, cylinderHeight, 16);
+    const q = new CANNON.Quaternion();
+    q.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+    body.addShape(cylinderShape, new CANNON.Vec3(0, 0, 0), q);
+  } else if (cylinderHeight === 0) {
+    // If it's exactly a sphere (e.g. radius = halfHeight)
+    // Just the two spheres will overlap perfectly, which is fine.
+  }
+
+  // Spheres for top and bottom to create a capsule
+  const sphereShape = new CANNON.Sphere(radius);
+  body.addShape(sphereShape, new CANNON.Vec3(0, halfHeight - radius, 0));
+  body.addShape(sphereShape, new CANNON.Vec3(0, -(halfHeight - radius), 0));
+
+  // Flat front bumper (Box) to push the ball better
+  // Positioned at local +Z (which corresponds to the front when rotated)
+  const bumperShape = new CANNON.Box(new CANNON.Vec3(radius * 1.5, halfHeight * 0.6, 0.1));
+  body.addShape(bumperShape, new CANNON.Vec3(0, 0, radius));
+
+  return body;
+}
+
 function addBot(room: Room, team: 'red' | 'blue', humanLike: boolean = false) {
   const botId = `bot_${Math.random().toString(36).substring(2, 8)}`;
   const color = team === 'red' ? '#ff007f' : '#00ffff';
   const startZ = team === 'red' ? 10 : -10;
 
-  const botBody = new CANNON.Body({
-    mass: 5,
-    shape: new CANNON.Box(getPlayerDimensions('robot')),
-    position: new CANNON.Vec3((Math.random() - 0.5) * 10, 1, startZ),
-    material: room.playerMaterial,
-    fixedRotation: true,
-    linearDamping: 0.9,
-  });
+  const botBody = createPlayerBody('robot', startZ, room.playerMaterial);
   room.world.addBody(botBody);
   room.playerBodies[botId] = botBody;
   room.playerInputs[botId] = { x: 0, z: 0, kick: false, jump: false, cameraAngle: 0 };
@@ -650,14 +682,7 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
       }
     }
 
-    const playerBody = new CANNON.Body({
-      mass: 5,
-      shape: new CANNON.Box(getPlayerDimensions(character)),
-      position: new CANNON.Vec3((Math.random() - 0.5) * 10, 1, startZ),
-      material: room.playerMaterial,
-      fixedRotation: true,
-      linearDamping: 0.9,
-    });
+    const playerBody = createPlayerBody(character, startZ, room.playerMaterial);
     room.world.addBody(playerBody);
     room.playerBodies[socket.id] = playerBody;
     room.playerInputs[socket.id] = { x: 0, z: 0, kick: false, jump: false, cameraAngle: 0 };
@@ -1071,6 +1096,12 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
             
             body.applyForce(new CANNON.Vec3(forceX, 0, forceZ), body.position);
             
+            // Update physics body rotation to face movement direction so the flat bumper works
+            if (Math.abs(body.velocity.x) > 0.1 || Math.abs(body.velocity.z) > 0.1) {
+              const angle = Math.atan2(body.velocity.x, body.velocity.z);
+              body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), angle);
+            }
+            
             if (input.jump) {
               if (body.position.y <= 1.1) {
                 body.velocity.y = 10; // Increased initial jump velocity
@@ -1159,14 +1190,28 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
                 const pHorizontalDistance = Math.sqrt(pdx * pdx + pdz * pdz);
                 
                 // If this player is significantly higher and horizontally close
-                if (body.position.y > otherBody.position.y + 0.5 && pHorizontalDistance < 1.0) {
+                if (body.position.y > otherBody.position.y + 0.5 && pHorizontalDistance < 1.2) {
                   const pushDir = new CANNON.Vec3(pdx, 0, pdz);
-                  if (pushDir.length() < 0.01) {
-                    pushDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+                  if (pushDir.length() < 0.1) {
+                    const angle = Math.random() * Math.PI * 2;
+                    pushDir.set(Math.cos(angle), 0, Math.sin(angle));
                   }
                   pushDir.normalize();
-                  // Push the top player off
-                  body.applyForce(pushDir.scale(150), body.position);
+                  
+                  const slipFactor = Math.max(0.5, 1.5 - pHorizontalDistance);
+                  
+                  // Teleport slightly to break perfect stacking
+                  body.position.x += pushDir.x * 0.1;
+                  body.position.z += pushDir.z * 0.1;
+
+                  // Apply extreme velocity to force them off instantly
+                  body.velocity.x = pushDir.x * 15 * slipFactor;
+                  body.velocity.z = pushDir.z * 15 * slipFactor;
+                  body.velocity.y = -10; // Force them downward
+                  
+                  // Push the bottom player slightly in the opposite direction
+                  otherBody.velocity.x -= pushDir.x * 5 * slipFactor;
+                  otherBody.velocity.z -= pushDir.z * 5 * slipFactor;
                 }
               }
             }
