@@ -1124,20 +1124,30 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
               }
             }
 
-            // Prevent standing on the ball
+            // Prevent standing on the ball (make them slip off)
             const dx = body.position.x - room.ballBody.position.x;
             const dz = body.position.z - room.ballBody.position.z;
             const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
-            if (body.position.y > room.ballBody.position.y + 0.3 && horizontalDistance < 1.2) {
+            if (body.position.y > room.ballBody.position.y + 0.4 && horizontalDistance < 1.2) {
               const pushDir = new CANNON.Vec3(dx, 0, dz);
-              if (pushDir.length() < 0.01) {
-                pushDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+              if (pushDir.length() < 0.1) {
+                // If perfectly centered, pick a random direction to slip
+                const angle = Math.random() * Math.PI * 2;
+                pushDir.set(Math.cos(angle), 0, Math.sin(angle));
               }
               pushDir.normalize();
-              // Push the player off the ball horizontally
-              body.applyForce(pushDir.scale(200), body.position);
-              // Also push the ball away slightly
-              room.ballBody.applyForce(pushDir.scale(-50), room.ballBody.position);
+              
+              // The closer to the center, the stronger the slip (unstable equilibrium)
+              const slipFactor = Math.max(0.1, 1.5 - horizontalDistance);
+              
+              // Push the player off the ball
+              body.applyForce(pushDir.scale(300 * slipFactor), body.position);
+              
+              // Squeeze the ball out from under the player
+              room.ballBody.applyForce(pushDir.scale(-400 * slipFactor), room.ballBody.position);
+              
+              // Add some spin to the ball to make it roll out naturally
+              room.ballBody.angularVelocity.set(pushDir.z * 15, 0, -pushDir.x * 15);
             }
 
             // Prevent standing on other players
