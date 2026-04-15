@@ -154,58 +154,6 @@ function createRoom(roomId: string, isPrivate: boolean, isTraining: boolean = fa
 
   createWall(0, wallHeight, 0, fieldWidth, 1, fieldLength + goalDepth * 2);
 
-  // Corner Bumpers (Vertical Curve)
-  const createCornerCurve = (x: number, z: number, radius: number) => {
-    const cylinderShape = new CANNON.Cylinder(radius, radius, wallHeight, 16);
-    const cornerBody = new CANNON.Body({
-      type: CANNON.Body.STATIC,
-      material: wallMaterial,
-    });
-    // CANNON cylinder is oriented along its local Z axis. Rotate to align with Y.
-    const q = new CANNON.Quaternion();
-    q.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-    cornerBody.addShape(cylinderShape, new CANNON.Vec3(0, 0, 0), q);
-    cornerBody.position.set(x, wallHeight / 2, z);
-    world.addBody(cornerBody);
-  };
-
-  const cr = 4; // corner radius
-  // Top Left (-x, -z)
-  createCornerCurve(-fieldWidth / 2 + cr, -fieldLength / 2 + cr, cr);
-  // Top Right (+x, -z)
-  createCornerCurve(fieldWidth / 2 - cr, -fieldLength / 2 + cr, cr);
-  // Bottom Left (-x, +z)
-  createCornerCurve(-fieldWidth / 2 + cr, fieldLength / 2 - cr, cr);
-  // Bottom Right (+x, +z)
-  createCornerCurve(fieldWidth / 2 - cr, fieldLength / 2 - cr, cr);
-
-  // Corner Banks / Ramps (Rocket League Style)
-  const createCornerBank = (x: number, z: number, angleY: number) => {
-    const bankShape = new CANNON.Box(new CANNON.Vec3(10, 0.5, 4));
-    const bankBody = new CANNON.Body({
-      type: CANNON.Body.STATIC,
-      material: wallMaterial,
-    });
-    
-    // Pitch up by 45 degrees
-    const qPitch = new CANNON.Quaternion();
-    qPitch.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 4);
-    
-    // Yaw to face the center
-    const qYaw = new CANNON.Quaternion();
-    qYaw.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), angleY);
-    
-    bankBody.quaternion = qYaw.mult(qPitch);
-    bankBody.position.set(x, 1, z);
-    world.addBody(bankBody);
-  };
-
-  // Add 45-degree sloping banks in the 4 corners so the ball rolls upwards
-  createCornerBank(-fieldWidth / 2 + cr/2, -fieldLength / 2 + cr/2, Math.PI / 4);     // Top Left
-  createCornerBank(fieldWidth / 2 - cr/2, -fieldLength / 2 + cr/2, -Math.PI / 4);     // Top Right
-  createCornerBank(-fieldWidth / 2 + cr/2, fieldLength / 2 - cr/2, 3 * Math.PI / 4);  // Bottom Left
-  createCornerBank(fieldWidth / 2 - cr/2, fieldLength / 2 - cr/2, -3 * Math.PI / 4);  // Bottom Right
-
   // Ball
   const ballBody = new CANNON.Body({
     mass: 0.8,
@@ -248,18 +196,18 @@ function createRoom(roomId: string, isPrivate: boolean, isTraining: boolean = fa
       const isBlue = state.team === 'blue';
       const z = isBlue ? -10 : 10;
       
-      let x = 0;
       if (isBlue) {
         const total = bluePlayers.length;
         const offset = (total - 1) * 2;
-        x = (blueIdx++ * 4) - offset;
+        const x = (blueIdx++ * 4) - offset;
+        p.position.set(x, 1, z);
       } else {
         const total = redPlayers.length;
         const offset = (total - 1) * 2;
-        x = (redIdx++ * 4) - offset;
+        const x = (redIdx++ * 4) - offset;
+        p.position.set(x, 1, z);
       }
       
-      p.position.set(x, 1, z);
       p.velocity.set(0, 0, 0);
       p.angularVelocity.set(0, 0, 0);
     }
@@ -421,6 +369,8 @@ function updateBots(room: Room) {
     if (room.ticks % reactionDelay !== 0) continue;
 
     const input = room.playerInputs[botId];
+    let targetX: number;
+    let targetZ: number;
     const opponentGoalZ = botState.team === 'red' ? -20 : 20;
     const ownGoalZ = botState.team === 'red' ? 20 : -20;
 
@@ -428,9 +378,6 @@ function updateBots(room: Room) {
     const toBallX = ballPos.x - botBody.position.x;
     const toBallZ = ballPos.z - botBody.position.z;
     const distToBall = Math.sqrt(toBallX * toBallX + toBallZ * toBallZ);
-
-    let targetX = ballPos.x;
-    let targetZ = ballPos.z;
 
     const isAttacker = botRoles[botId] === 'attacker';
     const isFillBot = !room.isTraining;
@@ -609,7 +556,7 @@ async function startServer() {
   worldCupFreePlayRoom.gameState.message = 'WORLD CUP LOBBY\nWAITING FOR TOURNAMENT...';
   rooms.set('WORLD_CUP_FREEPLAY', worldCupFreePlayRoom);
 
-  function leaveRoom(socket: any) {
+  function leaveRoom(socket: import('socket.io').Socket) {
     const roomId = playerRooms.get(socket.id);
     if (!roomId) return;
     
@@ -661,7 +608,7 @@ async function startServer() {
     }
   }
 
-function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: string, character: string = 'robot') {
+function joinRoom(socket: import('socket.io').Socket, room: Room, name: string, worldCupCountry?: string, character: string = 'robot') {
     socket.join(room.id);
     playerRooms.set(socket.id, room.id);
 
@@ -670,7 +617,7 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
       { red: 0, blue: 0 }
     );
     const team = teamCount.red <= teamCount.blue ? 'red' : 'blue';
-    let color = team === 'red' ? '#ff007f' : '#00ffff';
+    const color = team === 'red' ? '#ff007f' : '#00ffff';
     const startZ = team === 'red' ? 10 : -10;
 
     if (room.isWorldCup && worldCupCountry) {
@@ -994,16 +941,13 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
               room.gameState.message = 'OVERTIME!';
             } else {
               room.gameState.matchState = 'gameover';
-              let winner: 'red' | 'blue' | 'draw' = 'draw';
-              if (room.gameState.score.blue > room.gameState.score.red) {
+              const winner: 'red' | 'blue' | 'draw' = room.gameState.score.blue > room.gameState.score.red ? 'blue' : (room.gameState.score.red > room.gameState.score.blue ? 'red' : 'draw');
+              if (winner === 'blue') {
                 room.gameState.message = 'BLUE WINS!';
-                winner = 'blue';
-              } else if (room.gameState.score.red > room.gameState.score.blue) {
+              } else if (winner === 'red') {
                 room.gameState.message = 'RED WINS!';
-                winner = 'red';
               } else {
                 room.gameState.message = 'DRAW!';
-                winner = 'draw';
               }
 
               // Reward players
@@ -1011,18 +955,8 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
                 const player = room.gameState.players[id];
                 const socket = io.sockets.sockets.get(id);
                 if (socket && !id.startsWith('bot-')) {
-                  let coins = 0;
-                  let exp = 0;
-                  if (winner === 'draw') {
-                    coins = 15;
-                    exp = 5;
-                  } else if (player.team === winner) {
-                    coins = 35;
-                    exp = 10;
-                  } else {
-                    coins = 5;
-                    exp = 2;
-                  }
+                  const coins = winner === 'draw' ? 15 : (player.team === winner ? 35 : 5);
+                  const exp = winner === 'draw' ? 5 : (player.team === winner ? 10 : 2);
                   socket.emit('reward', { coins, exp });
                 }
               }
@@ -1035,22 +969,15 @@ function joinRoom(socket: any, room: Room, name: string, worldCupCountry?: strin
           if (room.stateTimer <= 0) {
             if (room.gameState.isOvertime) {
               room.gameState.matchState = 'gameover';
-              let winner: 'red' | 'blue' = room.gameState.score.blue > room.gameState.score.red ? 'blue' : 'red';
+              const winner: 'red' | 'blue' = room.gameState.score.blue > room.gameState.score.red ? 'blue' : 'red';
               
               // Reward players
               for (const id in room.gameState.players) {
                 const player = room.gameState.players[id];
                 const socket = io.sockets.sockets.get(id);
                 if (socket && !id.startsWith('bot-')) {
-                  let coins = 0;
-                  let exp = 0;
-                  if (player.team === winner) {
-                    coins = 35;
-                    exp = 10;
-                  } else {
-                    coins = 5;
-                    exp = 2;
-                  }
+                  const coins = player.team === winner ? 35 : 5;
+                  const exp = player.team === winner ? 10 : 2;
                   socket.emit('reward', { coins, exp });
                 }
               }
