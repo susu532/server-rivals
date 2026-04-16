@@ -489,8 +489,8 @@ function updateBots(room: Room) {
         }
       }
 
-      // Random jumps for Hard difficulty
-      if (room.difficulty === 'hard' && Math.random() < 0.01 && botBody.position.y < 1.1) {
+      // Random jumps for Hard difficulty (prevent fill bots from jumping)
+      if (room.difficulty === 'hard' && Math.random() < 0.01 && botBody.position.y < 1.1 && !isFillBot) {
         input.jump = true;
       } else {
         input.jump = false;
