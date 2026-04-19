@@ -727,27 +727,6 @@ function joinRoom(socket: import('socket.io').Socket, room: Room, name: string, 
       }
     });
 
-    socket.on("chat", (message: string) => {
-      if (message.length > 100) return;
-      const roomId = playerRooms.get(socket.id);
-      if (roomId) {
-        const room = rooms.get(roomId);
-        if (room) {
-          const player = room.gameState.players[socket.id];
-          if (player) {
-            io.to(roomId).emit("chat", {
-              id: Date.now().toString(),
-              playerId: socket.id,
-              playerName: player.name,
-              playerColor: player.color,
-              message,
-              timestamp: Date.now(),
-            });
-          }
-        }
-      }
-    });
-
     socket.on("disconnect", () => {
       console.log("User disconnected:", socket.id);
       leaveRoom(socket);
